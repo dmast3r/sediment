@@ -1,3 +1,4 @@
+modules = ["rust-stable"]
 [nix]
 channel = "stable-25_05"
 
