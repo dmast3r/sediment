@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::lookup::EntryState::{Absent, Live, Tombstone};
 use crate::memtable::{Memtable, SkipListMemtable};
 use crate::sstable::SsTable;
@@ -45,6 +45,14 @@ impl<M: Memtable> Db<M> {
 
     /// Insert a key-value pair, overwriting any existing value for the key.
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        if u32::try_from(key.len()).is_err() {
+            return Err(Error::KeyTooLong { len: key.len() });
+        }
+
+        if u32::try_from(value.len()).is_err() {
+            return Err(Error::ValueTooLong { len: value.len() });
+        }
+        
         self.memtable.put(key, value);
         Ok(())
     }
