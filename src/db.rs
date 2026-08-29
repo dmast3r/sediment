@@ -52,7 +52,7 @@ impl<M: Memtable> Db<M> {
         if u32::try_from(value.len()).is_err() {
             return Err(Error::ValueTooLong { len: value.len() });
         }
-        
+
         self.memtable.put(key, value);
         Ok(())
     }

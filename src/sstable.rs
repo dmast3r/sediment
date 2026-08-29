@@ -175,22 +175,22 @@ impl SsTable {
 
     fn read_record(reader: &mut impl Read, path: &Path) -> Result<Record> {
         let mut buffer = [0u8; 4];
-        reader.read_exact(&mut buffer)?;
+        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
         let key_len = u32::from_le_bytes(buffer);
 
         let mut key = vec![0u8; key_len as usize];
-        reader.read_exact(&mut key)?;
+        Self::read_exact_or_corrupt(reader, &mut key, path)?;
 
         let mut buffer = [0u8; 1];
-        reader.read_exact(&mut buffer)?;
+        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
         let tag = buffer[0];
 
         let mut buffer = [0u8; 4];
-        reader.read_exact(&mut buffer)?;
+        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
         let value_len = u32::from_le_bytes(buffer);
 
         let mut val = vec![0u8; value_len as usize];
-        reader.read_exact(&mut val)?;
+        Self::read_exact_or_corrupt(reader, &mut val, path)?;
 
         match tag {
             0 => Ok(Record {
@@ -203,6 +203,16 @@ impl SsTable {
                 detail: format!("invalid tag {tag} for key {key:?}"),
             }),
         }
+    }
+
+    fn read_exact_or_corrupt(reader: &mut impl Read, buf: &mut [u8], path: &Path) -> Result<()> {
+        reader.read_exact(buf).map_err(|e| match e.kind() {
+            std::io::ErrorKind::UnexpectedEof => Error::CorruptSsTable {
+                path: path.to_path_buf(),
+                detail: format!("file ends mid-record, wanted {} more bytes", buf.len()),
+            },
+            _ => Error::Io(e),
+        })
     }
 }
 
@@ -508,5 +518,37 @@ mod tests {
         assert_eq!(entries[1].0, b"empty-val");
         assert_eq!(entries[1].1, 0); // Live
         assert_eq!(entries[1].2, b""); // empty value, but tag=0 not 1
+    }
+
+    /// A file with a valid footer whose one record claims a value longer than
+    /// the bytes that exist. `open`'s scan hits EOF mid-record. The caller
+    /// must see "this file is corrupt", not "an I/O operation failed".
+    #[test]
+    fn truncated_mid_record_is_corruption_not_io() {
+        let path = temp_path("mid-record-eof");
+
+        // Hand-craft the file: one record whose val_len lies.
+        //   key_len=5, key="hello", tag=0, val_len=1000, but only 10 value
+        //   bytes present — then a valid magic footer, so the footer check
+        //   passes and the scan is what discovers the problem.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.extend_from_slice(b"hello");
+        bytes.push(0); // tag: Live
+        bytes.extend_from_slice(&1000u32.to_le_bytes()); // claims 1000 bytes...
+        bytes.extend_from_slice(&[0xAB; 10]); // ...but only 10 exist
+        bytes.extend_from_slice(&MAGIC.to_le_bytes());
+        std::fs::write(&path, &bytes).expect("write crafted file");
+
+        let Err(err) = super::SsTable::open(&path) else {
+            panic!("open must fail on a file whose record overruns the data");
+        };
+
+        assert!(
+            matches!(err, crate::Error::CorruptSsTable { .. }),
+            "running out of bytes mid-record is corruption evidence and must \
+             surface as CorruptSsTable so the caller does not blindly retry; \
+             got instead: {err:?}"
+        );
     }
 }
