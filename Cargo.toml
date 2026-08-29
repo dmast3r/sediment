@@ -2,5 +2,24 @@
 name = "sediment"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "An LSM-tree based key-value store, written in Rust."
+
+[lib]
+name = "sediment"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sediment-cli"
+path = "src/bin/sediment-cli.rs"
 
 [dependencies]
+thiserror = "2"
+rand = "0.9"
+
+[dev-dependencies]
+rstest = "0.26.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
