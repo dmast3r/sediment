@@ -16,6 +16,7 @@ path = "src/bin/sediment-cli.rs"
 [dependencies]
 thiserror = "2"
 rand = "0.9"
+libc = "0.2.189"
 
 [dev-dependencies]
 rstest = "0.26.1"

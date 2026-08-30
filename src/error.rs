@@ -11,6 +11,8 @@ pub enum Error {
     KeyTooLong { len: usize },
     #[error("value is {len} bytes, exceeding the {} byte maximum", u32::MAX)]
     ValueTooLong { len: usize },
+    #[error("directory {} is already in use by another process", path.display())]
+    DatabaseDirectoryAlreadyInUse { path: PathBuf },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

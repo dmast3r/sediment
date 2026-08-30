@@ -2,6 +2,10 @@ use crate::error::{Error, Result};
 use crate::lookup::EntryState::{Absent, Live, Tombstone};
 use crate::memtable::{Memtable, SkipListMemtable};
 use crate::sstable::SsTable;
+use std::fs;
+use std::fs::File;
+use std::io::ErrorKind;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// A database instance: insert key-value pairs, look up the value for a key, and delete keys.
@@ -16,6 +20,8 @@ pub struct Db<M: Memtable = SkipListMemtable> {
     memtable: M,
     path: PathBuf,
     sstables: Vec<SsTable>,
+    #[allow(dead_code)]
+    directory: File,
 }
 
 impl Db<SkipListMemtable> {
@@ -36,10 +42,14 @@ impl<M: Memtable> Db<M> {
     pub fn open_with<P: AsRef<Path>>(memtable: M, path: P) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         std::fs::create_dir_all(&path_buf)?;
+
+        let directory = Self::acquire_dir_lock(&path)?;
+        
         Ok(Db {
             memtable,
             path: path_buf,
             sstables: Vec::new(),
+            directory,
         })
     }
 
@@ -89,6 +99,28 @@ impl<M: Memtable> Db<M> {
         self.sstables.push(SsTable::open(&path)?);
         self.memtable.clear();
         Ok(())
+    }
+
+    fn acquire_dir_lock<P: AsRef<Path>>(dir_path: P) -> Result<File> {
+        let file = File::open(dir_path.as_ref())?;
+
+        // SAFETY: flock doesn't have a memory contract nor touches any pointers.
+        // Its two parameters are a file descriptor and an operational flag.
+        // If the FD is invalid, it returns the EBADF error instead of crashing with UB.
+        // The fd is valid because file is alive across the call
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+
+        if rc == 0 {
+            Ok(file)
+        } else {
+            let err = std::io::Error::last_os_error();
+            match err.raw_os_error() {
+                Some(libc::EWOULDBLOCK) => Err(Error::DatabaseDirectoryAlreadyInUse {
+                    path: dir_path.as_ref().to_path_buf(),
+                }),
+                _ => Err(Error::Io(err)),
+            }
+        }
     }
 }
 
