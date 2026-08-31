@@ -51,14 +51,18 @@ fn open_creates_the_data_directory() {
     assert!(dir.is_dir(), "the created path should be a directory");
 }
 
-/// Opening twice on the same directory should not error (the directory
-/// already existing is fine — `create_dir_all` is idempotent).
+/// Opening on the same directory twice — sequentially — should not error
+/// (the directory already existing is fine; `create_dir_all` is idempotent).
+/// The first handle is dropped before the second open: since M8's directory
+/// lock, two *simultaneous* opens are forbidden by design, and that behavior
+/// is asserted by `second_open_fails_while_first_is_alive` in db_startup.rs.
 #[test]
 fn open_is_idempotent_on_existing_directory() {
     let dir = temp_dir("open-idempotent");
 
-    let _db1 = Db::open(&dir).expect("first open should succeed");
-    let _db2 = Db::open(&dir).expect("second open on existing dir should also succeed");
+    let db1 = Db::open(&dir).expect("first open should succeed");
+    drop(db1); // release the directory lock
+    let _db2 = Db::open(&dir).expect("reopen on existing dir should succeed");
 }
 
 // ---------------------------------------------------------------------------

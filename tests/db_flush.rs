@@ -213,36 +213,6 @@ fn second_flush_replaces_the_first_file() {
     assert_eq!(file_names(&dir), vec!["sstable.sst".to_string()]);
 }
 
-/// Two `Db` handles on the same directory are not prevented and not detected.
-///
-/// Nothing here asserts corruption — it asserts the ABSENCE of a guard, so the
-/// gap is recorded. Both handles keep separate memtables and both write the same
-/// file name, so the second flush silently discards the first handle's data.
-///
-/// LevelDB and RocksDB both prevent this by taking an exclusive lock on a `LOCK`
-/// file at open, so the second open fails fast. Adding that is a deferred item.
-#[test]
-fn concurrent_db_handles_are_not_yet_prevented() {
-    let dir = temp_dir("two-handles");
-
-    let mut first = Db::open(&dir).expect("first open");
-    let second = Db::open(&dir);
-
-    assert!(
-        second.is_ok(),
-        "a second open currently succeeds; no lock file guards the directory. \
-         When directory locking lands, this assertion flips to expecting an error."
-    );
-
-    let mut second = second.expect("second open");
-    first.put(b"from-first", b"1").expect("put");
-    second.put(b"from-second", b"2").expect("put");
-
-    // Each handle sees only its own writes: separate memtables, no coordination.
-    assert_eq!(first.get(b"from-second").expect("get"), None);
-    assert_eq!(second.get(b"from-first").expect("get"), None);
-}
-
 // ---------------------------------------------------------------------------
 // Not tested here, and why
 // ---------------------------------------------------------------------------

@@ -44,7 +44,8 @@ impl<M: Memtable> Db<M> {
         std::fs::create_dir_all(&path_buf)?;
 
         let directory = Self::acquire_dir_lock(&path)?;
-        
+        Self::sweep_stale_tmp_files(&path)?;
+
         Ok(Db {
             memtable,
             path: path_buf,
@@ -121,6 +122,26 @@ impl<M: Memtable> Db<M> {
                 _ => Err(Error::Io(err)),
             }
         }
+    }
+
+    fn sweep_stale_tmp_files<P: AsRef<Path>>(path: P) -> Result<()> {
+        let entries = fs::read_dir(path.as_ref())?;
+
+        for entry in entries {
+            let entry_path = entry?.path();
+            if entry_path.extension().and_then(|s| s.to_str()) == Some("tmp") {
+                fs::remove_file(entry_path).or_else(|e| {
+                    // if the file has already been deleted, then it's no-op and safe to ignore
+                    if e.kind() == ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(e)
+                    }
+                })?;
+            }
+        }
+
+        Ok(())
     }
 }
 
