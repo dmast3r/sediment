@@ -1,7 +1,9 @@
 use crate::Error;
+use crate::Error::{CorruptSsTable, Io};
 use crate::error::Result;
 use crate::lookup::EntryState;
 use crate::memtable::Memtable;
+use crate::record::{DecodeError, Record};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::{File, rename};
@@ -30,17 +32,6 @@ pub struct SsTable {
     footer_start: u64,
 }
 
-struct Record {
-    key: Vec<u8>,
-    val: Option<Vec<u8>>, // None = tombstone
-}
-
-impl Record {
-    fn encoded_len(&self) -> u64 {
-        4 + self.key.len() as u64 + 1 + 4 + self.val.as_ref().map_or(0, Vec::len) as u64
-    }
-}
-
 impl SsTable {
     const MAGIC: u64 = 0x5345_4449_4D45_4E54; // b"SEDIMENT" as u64 LE
     const FOOTER_LEN: u64 = 8;
@@ -53,20 +44,10 @@ impl SsTable {
 
         let mut writer = BufWriter::new(File::create(&path_buf)?);
 
-        for (key, val) in memtable.iter() {
-            let key_len = u32::try_from(key.len()).expect("key exceeded 4 GB");
-            writer.write_all(&key_len.to_le_bytes())?;
-            writer.write_all(key)?;
-
-            let (tag, val_bytes): (u8, &[u8]) = match val {
-                Some(v) => (0, v),
-                None => (1, &[]),
-            };
-            let val_len = u32::try_from(val_bytes.len()).expect("val exceeded 4 GB");
-            writer.write_all(&[tag])?;
-            writer.write_all(&val_len.to_le_bytes())?;
-            writer.write_all(val_bytes)?;
-        }
+        memtable.iter().try_for_each(|(key, val)| -> Result<()> {
+            Record::encode(&mut writer, key, val)
+                .map_err(|e| Self::convert_decode_error(e, path.as_ref()))
+        })?;
 
         writer.write_all(&Self::MAGIC.to_le_bytes())?;
         writer
@@ -85,7 +66,7 @@ impl SsTable {
         let file_len = file.metadata()?.len();
 
         if file_len < Self::FOOTER_LEN {
-            return Err(Error::CorruptSsTable {
+            return Err(CorruptSsTable {
                 path: path.to_path_buf(),
                 detail: format!(
                     "file is {file_len} bytes, shorter than the {}-byte footer",
@@ -101,7 +82,7 @@ impl SsTable {
         let footer = u64::from_le_bytes(buffer);
 
         if footer != Self::MAGIC {
-            return Err(Error::CorruptSsTable {
+            return Err(CorruptSsTable {
                 path: path.to_path_buf(),
                 detail: format!(
                     "footer magic is {footer:#018x}, expected {:#018x}",
@@ -117,7 +98,8 @@ impl SsTable {
 
         let mut reader = BufReader::new(file);
         while total_bytes_read < footer_start {
-            let record = Self::read_record(&mut reader, path)?;
+            let record =
+                Record::decode(&mut reader).map_err(|e| Self::convert_decode_error(e, path))?;
             let record_bytes = record.encoded_len();
             bytes_counter += record_bytes;
 
@@ -132,7 +114,7 @@ impl SsTable {
         }
 
         if total_bytes_read != footer_start {
-            return Err(Error::CorruptSsTable {
+            return Err(CorruptSsTable {
                 path: path.to_path_buf(),
                 detail: format!("data region ends at {total_bytes_read}, expected {footer_start}"),
             });
@@ -159,7 +141,8 @@ impl SsTable {
 
         let mut offset = block_start;
         while offset < self.footer_start {
-            let record = Self::read_record(&mut file, &self.path)?;
+            let record =
+                Record::decode(&mut file).map_err(|e| Self::convert_decode_error(e, &self.path))?;
             offset += record.encoded_len();
             match record.key.as_slice().cmp(key) {
                 Ordering::Less => continue,
@@ -173,46 +156,18 @@ impl SsTable {
         Ok(EntryState::Absent)
     }
 
-    fn read_record(reader: &mut impl Read, path: &Path) -> Result<Record> {
-        let mut buffer = [0u8; 4];
-        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
-        let key_len = u32::from_le_bytes(buffer);
-
-        let mut key = vec![0u8; key_len as usize];
-        Self::read_exact_or_corrupt(reader, &mut key, path)?;
-
-        let mut buffer = [0u8; 1];
-        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
-        let tag = buffer[0];
-
-        let mut buffer = [0u8; 4];
-        Self::read_exact_or_corrupt(reader, &mut buffer, path)?;
-        let value_len = u32::from_le_bytes(buffer);
-
-        let mut val = vec![0u8; value_len as usize];
-        Self::read_exact_or_corrupt(reader, &mut val, path)?;
-
-        match tag {
-            0 => Ok(Record {
-                key,
-                val: Some(val),
-            }),
-            1 => Ok(Record { key, val: None }),
-            _ => Err(Error::CorruptSsTable {
+    fn convert_decode_error(err: DecodeError, path: &Path) -> Error {
+        match err {
+            DecodeError::Incomplete { detail } => CorruptSsTable {
                 path: path.to_path_buf(),
-                detail: format!("invalid tag {tag} for key {key:?}"),
-            }),
-        }
-    }
-
-    fn read_exact_or_corrupt(reader: &mut impl Read, buf: &mut [u8], path: &Path) -> Result<()> {
-        reader.read_exact(buf).map_err(|e| match e.kind() {
-            std::io::ErrorKind::UnexpectedEof => Error::CorruptSsTable {
-                path: path.to_path_buf(),
-                detail: format!("file ends mid-record, wanted {} more bytes", buf.len()),
+                detail,
             },
-            _ => Error::Io(e),
-        })
+            DecodeError::Io(err) => Io(err),
+            e @ DecodeError::InvalidTag { .. } => CorruptSsTable {
+                path: path.to_path_buf(),
+                detail: e.to_string(),
+            },
+        }
     }
 }
 
@@ -519,6 +474,17 @@ mod tests {
         assert_eq!(entries[1].1, 0); // Live
         assert_eq!(entries[1].2, b""); // empty value, but tag=0 not 1
     }
+
+    // -----------------------------------------------------------------------
+    // M8 step 0b — mid-record EOF is corruption, not an I/O error.
+    //
+    // Decided in the 2026-08-29 error-handling design session (see
+    // docs/design/error-handling-boundary.md, "Errors must distinguish what
+    // callers must treat differently"). Inside a scan whose bounds guarantee
+    // a complete record, running out of bytes means the file lies about its
+    // own structure: that is CorruptSsTable, so the caller knows retrying is
+    // useless. Every other io::ErrorKind must still pass through as Io.
+    // -----------------------------------------------------------------------
 
     /// A file with a valid footer whose one record claims a value longer than
     /// the bytes that exist. `open`'s scan hits EOF mid-record. The caller
