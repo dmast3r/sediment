@@ -8,7 +8,7 @@ pub(crate) struct Record {
 
 #[derive(Debug, Error)]
 pub(crate) enum DecodeError {
-    #[error("Invalid sediment record {detail}")]
+    #[error("{detail}")]
     Incomplete { detail: String },
     #[error("Invalid tag {tag} in record for {:?}", key)]
     InvalidTag { key: Vec<u8>, tag: u8 },
@@ -76,7 +76,7 @@ impl Record {
     fn read_exact(reader: &mut impl Read, buf: &mut [u8]) -> Result<()> {
         reader.read_exact(buf).map_err(|e| match e.kind() {
             std::io::ErrorKind::UnexpectedEof => DecodeError::Incomplete {
-                detail: format!("record ends mid-stream, wanted {} more byte", buf.len()),
+                detail: format!("record ends mid-stream, wanted {} more bytes", buf.len()),
             },
             _ => DecodeError::Io(e),
         })

@@ -41,7 +41,7 @@ impl<M: Memtable> Db<M> {
     /// allocator is free to build itself however it likes before handing it in.
     pub fn open_with<P: AsRef<Path>>(memtable: M, path: P) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
-        std::fs::create_dir_all(&path_buf)?;
+        fs::create_dir_all(&path_buf)?;
 
         let directory = Self::acquire_dir_lock(&path)?;
         Self::sweep_stale_tmp_files(&path)?;
@@ -129,7 +129,7 @@ impl<M: Memtable> Db<M> {
 
         for entry in entries {
             let entry_path = entry?.path();
-            if entry_path.extension().and_then(|s| s.to_str()) == Some("tmp") {
+            if SsTable::is_tmp_path(&entry_path) {
                 fs::remove_file(entry_path).or_else(|e| {
                     // if the file has already been deleted, then it's no-op and safe to ignore
                     if e.kind() == ErrorKind::NotFound {
@@ -153,7 +153,7 @@ mod tests {
     fn temp_dir(test_name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("sediment-db-unit-{test_name}"));
-        let _ = std::fs::remove_dir_all(&p);
+        let _ = fs::remove_dir_all(&p);
         p
     }
 

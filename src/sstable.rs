@@ -36,11 +36,10 @@ impl SsTable {
     const MAGIC: u64 = 0x5345_4449_4D45_4E54; // b"SEDIMENT" as u64 LE
     const FOOTER_LEN: u64 = 8;
     const BLOCK_SIZE: u64 = 4096;
+    const TMP_EXTENSION: &str = "tmp";
 
     pub(crate) fn flush<P: AsRef<Path>, M: Memtable>(path: P, memtable: &M) -> Result<()> {
-        let mut tmp = path.as_ref().as_os_str().to_owned();
-        tmp.push(".tmp");
-        let path_buf = PathBuf::from(tmp);
+        let path_buf = Self::tmp_path(path.as_ref());
 
         let mut writer = BufWriter::new(File::create(&path_buf)?);
 
@@ -58,6 +57,10 @@ impl SsTable {
         rename(&path_buf, path.as_ref())?;
 
         Ok(())
+    }
+
+    pub(crate) fn is_tmp_path<P: AsRef<Path>>(path: P) -> bool {
+        path.as_ref().extension().and_then(|s| s.to_str()) == Some(Self::TMP_EXTENSION)
     }
 
     pub(crate) fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -154,6 +157,13 @@ impl SsTable {
         }
 
         Ok(EntryState::Absent)
+    }
+
+    fn tmp_path<P: AsRef<Path>>(path: P) -> PathBuf {
+        let mut tmp_path_string = path.as_ref().as_os_str().to_owned();
+        tmp_path_string.push(".");
+        tmp_path_string.push(Self::TMP_EXTENSION);
+        PathBuf::from(tmp_path_string)
     }
 
     fn convert_decode_error(err: DecodeError, path: &Path) -> Error {
