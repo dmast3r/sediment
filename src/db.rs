@@ -2,6 +2,7 @@ use crate::error::{Error, Result};
 use crate::lookup::EntryState::{Absent, Live, Tombstone};
 use crate::memtable::{Memtable, SkipListMemtable};
 use crate::sstable::SsTable;
+use crate::wal::Wal;
 use std::fs;
 use std::fs::File;
 use std::io::ErrorKind;
@@ -22,6 +23,7 @@ pub struct Db<M: Memtable = SkipListMemtable> {
     sstables: Vec<SsTable>,
     #[allow(dead_code)]
     directory: File,
+    wal: Wal,
 }
 
 impl Db<SkipListMemtable> {
@@ -39,18 +41,28 @@ impl<M: Memtable> Db<M> {
     /// dependency-injection seam: `Db` imposes no requirement on *how* a
     /// memtable is constructed, so an implementation needing a capacity hint or
     /// allocator is free to build itself however it likes before handing it in.
-    pub fn open_with<P: AsRef<Path>>(memtable: M, path: P) -> Result<Self> {
+    pub fn open_with<P: AsRef<Path>>(mut memtable: M, path: P) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         fs::create_dir_all(&path_buf)?;
 
         let directory = Self::acquire_dir_lock(&path)?;
         Self::sweep_stale_tmp_files(&path)?;
 
+        let wal = Wal::open(&path)?;
+        for record in wal.replay()? {
+            let key = record.key.as_slice();
+            match record.val {
+                Some(val) => memtable.put(key, val.as_slice()),
+                None => memtable.delete(key),
+            }
+        }
+
         Ok(Db {
             memtable,
             path: path_buf,
             sstables: Vec::new(),
             directory,
+            wal,
         })
     }
 
@@ -64,6 +76,7 @@ impl<M: Memtable> Db<M> {
             return Err(Error::ValueTooLong { len: value.len() });
         }
 
+        self.wal.append(key, Some(value))?;
         self.memtable.put(key, value);
         Ok(())
     }
@@ -90,6 +103,7 @@ impl<M: Memtable> Db<M> {
 
     /// Delete a key. Deleting a key that does not exist is a harmless no-op.
     pub fn delete(&mut self, key: &[u8]) -> Result<()> {
+        self.wal.append(key, None)?;
         self.memtable.delete(key);
         Ok(())
     }
@@ -98,6 +112,7 @@ impl<M: Memtable> Db<M> {
         let path = self.path.join("sstable.sst");
         SsTable::flush(&path, &self.memtable)?;
         self.sstables.push(SsTable::open(&path)?);
+        self.wal.reset()?;
         self.memtable.clear();
         Ok(())
     }

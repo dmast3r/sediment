@@ -23,23 +23,23 @@ impl Record {
         4 + self.key.len() as u64 + 1 + 4 + self.val.as_ref().map_or(0, Vec::len) as u64
     }
 
-    pub(crate) fn encode(writer: &mut impl Write, key: &[u8], val: Option<&[u8]>) -> Result<()> {
+    pub(crate) fn encode(
+        writer: &mut impl Write,
+        key: &[u8],
+        val: Option<&[u8]>,
+    ) -> std::io::Result<()> {
         let key_len = u32::try_from(key.len()).expect("key exceeded 4 GB");
-        writer
-            .write_all(&key_len.to_le_bytes())
-            .map_err(DecodeError::Io)?;
-        writer.write_all(key).map_err(DecodeError::Io)?;
+        writer.write_all(&key_len.to_le_bytes())?;
+        writer.write_all(key)?;
 
         let (tag, val_bytes): (u8, &[u8]) = match val {
             Some(v) => (0, v),
             None => (1, &[]),
         };
         let val_len = u32::try_from(val_bytes.len()).expect("val exceeded 4 GB");
-        writer.write_all(&[tag]).map_err(DecodeError::Io)?;
-        writer
-            .write_all(&val_len.to_le_bytes())
-            .map_err(DecodeError::Io)?;
-        writer.write_all(val_bytes).map_err(DecodeError::Io)?;
+        writer.write_all(&[tag])?;
+        writer.write_all(&val_len.to_le_bytes())?;
+        writer.write_all(val_bytes)?;
 
         Ok(())
     }

@@ -44,8 +44,8 @@ impl SsTable {
         let mut writer = BufWriter::new(File::create(&path_buf)?);
 
         memtable.iter().try_for_each(|(key, val)| -> Result<()> {
-            Record::encode(&mut writer, key, val)
-                .map_err(|e| Self::convert_decode_error(e, path.as_ref()))
+            Record::encode(&mut writer, key, val)?;
+            Ok(())
         })?;
 
         writer.write_all(&Self::MAGIC.to_le_bytes())?;

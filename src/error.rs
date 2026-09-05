@@ -5,7 +5,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("{}: not a valid sediment SSTable ({detail})", path.display())]
+    #[error("{}: not a valid Sediment SSTable ({detail})", path.display())]
     CorruptSsTable { path: PathBuf, detail: String },
     #[error("key is {len} bytes, exceeding the {} byte maximum", u32::MAX)]
     KeyTooLong { len: usize },
@@ -13,6 +13,8 @@ pub enum Error {
     ValueTooLong { len: usize },
     #[error("directory {} is already in use by another process", path.display())]
     DatabaseDirectoryAlreadyInUse { path: PathBuf },
+    #[error("{}: not a valid Sediment WAL ({detail})", path.display())]
+    CorruptWal { path: PathBuf, detail: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -71,7 +71,8 @@ fn flush_writes_sstable_into_the_db_directory() {
 }
 
 /// Nothing is written outside the database directory. Checked by confirming the
-/// directory holds exactly the one expected file — no stray siblings.
+/// directory holds exactly the expected files — no stray siblings. Since M8
+/// the WAL lives alongside the SSTable, so the expected inventory is two files.
 #[test]
 fn flush_writes_exactly_one_file() {
     let dir = temp_dir("exactly-one-file");
@@ -83,8 +84,8 @@ fn flush_writes_exactly_one_file() {
 
     assert_eq!(
         file_names(&dir),
-        vec!["sstable.sst".to_string()],
-        "flush should leave exactly one file in the db directory"
+        vec!["sstable.sst".to_string(), "wal".to_string()],
+        "flush should leave exactly the SSTable and the WAL in the db directory"
     );
 }
 
@@ -210,37 +211,8 @@ fn second_flush_replaces_the_first_file() {
          Sequenced file names are a deferred item; this test pins the loss \
          so it is visible rather than silent."
     );
-    assert_eq!(file_names(&dir), vec!["sstable.sst".to_string()]);
+    assert_eq!(
+        file_names(&dir),
+        vec!["sstable.sst".to_string(), "wal".to_string()]
+    );
 }
-
-// ---------------------------------------------------------------------------
-// Not tested here, and why
-// ---------------------------------------------------------------------------
-//
-// Three properties of the write path have no test, and green above does not
-// imply any of them hold:
-//
-//   1. A failed write leaves no file at the final path.
-//   2. A crash between `sync_all` and `rename` is recoverable.
-//   3. `sync_all` makes the bytes survive a power cut.
-//
-// All three need the filesystem to fail on demand. Why that is not cheap:
-//
-//   * A fake writer gets you partway. You can define a type that implements
-//     `std::io::Write` and returns an error after N bytes, hand it to the
-//     encoding loop, and prove the `?` operators propagate correctly. That is
-//     worth doing and would be a genuine test of the encoder.
-//   * It cannot reach the rest. `sync_all` is a method on `std::fs::File`, a
-//     concrete type. `rename` is a free function in `std::fs`. Neither is
-//     called through the `Write` trait, so substituting a fake writer does not
-//     intercept them. Covering those needs an abstraction over the filesystem
-//     itself — a trait with `create`, `sync`, and `rename` methods, with a real
-//     implementation and a failing one. That is a real design change to the
-//     write path, not a test-only addition.
-//   * Property 3 is not testable in a unit test at all. Confirming data survives
-//     a power cut requires cutting the power.
-//
-// Where this belongs: the proptest milestone already scopes "recovery from
-// random crash points", which is the same machinery. Introducing a filesystem
-// abstraction there covers 1 and 2 together. Property 3 stays untestable and
-// is handled by review, not tests.
