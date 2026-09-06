@@ -1,5 +1,6 @@
 mod db;
 mod error;
+mod fsync;
 mod lookup;
 mod memtable;
 mod record;

@@ -1,18 +1,13 @@
-//! M7 — SSTable read path, tested through `Db`'s public API.
+//! SSTable read path, tested through `Db`'s public API.
 //!
-//! At this milestone `Db::get` consults both the in-memory memtable and the
-//! on-disk SSTable (if one exists). The tests below exercise that combined
-//! read path.
-//!
-//! What these tests do NOT cover, and why:
-//!   - Concurrent reads/writes: still single-threaded (M12/M13).
-//!   - Multiple SSTables: one SSTable exists after one flush (M10).
-//!   - Compaction: not implemented (M12).
+//! `Db::get` consults the in-memory memtable and then the on-disk SSTable
+//! (if one exists). The tests below exercise that combined read path.
 //!
 //! The tombstone rule that appears in several tests is the load-bearing
 //! invariant: a tombstone anywhere in the search path is a stopping hit.
-//! At M7 there is only one SSTable so falling through is impossible, but the
-//! tests pin the correct behavior now so M10 does not accidentally break it.
+//! With a single SSTable falling through is impossible, but the tests pin
+//! the correct behavior now so a multi-table read path cannot accidentally
+//! break it.
 
 use std::path::PathBuf;
 
@@ -20,7 +15,7 @@ use sediment::Db;
 
 fn temp_dir(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("sediment-m7-{name}"));
+    p.push(format!("sediment-read-{name}"));
     let _ = std::fs::remove_dir_all(&p);
     p
 }
@@ -31,9 +26,8 @@ fn temp_dir(name: &str) -> PathBuf {
 
 /// The simplest possible read path: write a key, flush, read it back.
 ///
-/// Before M7 `get` returns `None` after a flush because the memtable is
-/// cleared and nothing reads SSTables. This is the test that turns green
-/// when the SSTable read path lands.
+/// Without the SSTable read path, `get` would return `None` after a flush:
+/// the memtable is cleared and the value lives only on disk.
 #[test]
 fn get_returns_flushed_value() {
     let dir = temp_dir("get-flushed");
@@ -96,8 +90,9 @@ fn memtable_shadows_sstable() {
 /// A tombstone in the SSTable means the key was deleted before the flush.
 /// `get` must return `None`, not fall through to some older value.
 ///
-/// At M7 there is no older layer to fall through to, but pinning this now
-/// ensures M10 does not accidentally resurrect deleted keys.
+/// With a single SSTable there is no older layer to fall through to, but
+/// pinning this now ensures a multi-table read path cannot resurrect
+/// deleted keys.
 #[test]
 fn tombstone_in_sstable_returns_none() {
     let dir = temp_dir("tombstone-sstable");

@@ -1,24 +1,11 @@
-//! M2 — In-memory memtable behavior tests.
+//! Core key-value behavior, tested through the public API.
 //!
-//! Where `api_surface.rs` pinned down the *shape* of the API (names,
+//! Where `api_surface.rs` pins down the *shape* of the API (names,
 //! signatures, error type), this file pins down its *behavior*: data put
 //! in can be read back, overwrites win, deletes remove, and missing keys
 //! return `None` rather than erroring.
 //!
-//! All storage is in-memory for M2 (a `HashMap` behind the scenes). The
-//! `path` argument to `Db::open` is used only to create a directory; no
-//! file contents are read or written yet.
-//!
-//! How to know M2 is done:
-//!   1. Every test in this file PASSES (no `#[should_panic]` here — these
-//!      assert real behavior).
-//!   2. The corresponding tests in `api_surface.rs` have had their
-//!      `#[should_panic]` removed and now pass for real (see that file).
-//!   3. `./scripts/check.sh` is fully green.
-//!
-//! Each test uses a unique temp directory so runs don't collide. We build
-//! the path from the test name; if you run tests in parallel (the default)
-//! they won't step on each other.
+//! Each test uses a unique temp directory so parallel runs don't collide.
 
 use std::path::PathBuf;
 
@@ -28,7 +15,7 @@ use sediment::Db;
 /// want to prove `Db::open` creates it.
 fn temp_dir(test_name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("sediment-m2-{test_name}"));
+    p.push(format!("sediment-ops-{test_name}"));
     // Best-effort clean slate: remove any leftovers from a previous run.
     let _ = std::fs::remove_dir_all(&p);
     p
@@ -53,9 +40,9 @@ fn open_creates_the_data_directory() {
 
 /// Opening on the same directory twice — sequentially — should not error
 /// (the directory already existing is fine; `create_dir_all` is idempotent).
-/// The first handle is dropped before the second open: since M8's directory
-/// lock, two *simultaneous* opens are forbidden by design, and that behavior
-/// is asserted by `second_open_fails_while_first_is_alive` in db_startup.rs.
+/// The first handle is dropped before the second open: the directory lock
+/// forbids two *simultaneous* opens by design, and that behavior is
+/// asserted by `second_open_fails_while_first_is_alive` in db_startup.rs.
 #[test]
 fn open_is_idempotent_on_existing_directory() {
     let dir = temp_dir("open-idempotent");

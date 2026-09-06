@@ -1,22 +1,13 @@
-//! M8 integration tests — startup, durability, and the write-ahead log.
+//! Startup, durability, and write-ahead-log behavior, tested through the
+//! public API. Each doc comment names the policy the test pins; the recovery
+//! semantics are specified in docs/design/wal.md and
+//! docs/design/error-handling-boundary.md.
 //!
-//! These tests are the specification for M8 (see docs/milestones/M8.md and
-//! docs/design/error-handling-boundary.md). They are written BEFORE the
-//! implementation and fail until it exists. Each doc comment names the policy
-//! the test pins.
-//!
-//! Provisional spec pinned here (rename HERE FIRST if you disagree, then
-//! implement to match):
+//! On-disk facts these tests rely on:
 //!   - The WAL lives at `<db dir>/wal`.
 //!   - A WAL record reuses the SSTable entry encoding:
 //!     [key_len: u32 LE][key][tag: u8][val_len: u32 LE][val],
 //!     tag 0 = live, tag 1 = tombstone (val_len 0).
-//!
-//! Deliberately NOT here yet:
-//!   - "two flushes produce two files" — waits on the manifest design session
-//!     (M8 step 6).
-//!   - oversized-key validation (step 0a) — the test design needs discussion
-//!     first (a 4 GiB key cannot be cheaply allocated in a unit test).
 
 use sediment::{Db, Error};
 use std::path::PathBuf;
@@ -24,12 +15,12 @@ use std::path::PathBuf;
 /// Fresh directory per test, cleaned of prior-run leftovers.
 fn temp_dir(test_name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("sediment-m8-{test_name}"));
+    p.push(format!("sediment-startup-{test_name}"));
     let _ = std::fs::remove_dir_all(&p);
     p
 }
 
-/// The WAL's location inside a db directory. Provisional spec.
+/// The WAL's location inside a db directory.
 fn wal_path(dir: &std::path::Path) -> PathBuf {
     dir.join("wal")
 }
@@ -113,10 +104,6 @@ fn delete_survives_reopen_without_flush() {
 /// that resets the log at open destroys the only durable copy of acknowledged
 /// writes — data the NEXT crash then loses, invisibly to any single-reopen
 /// test (the value still reads back from the in-process memtable).
-///
-/// Regression guard: this exact bug existed mid-M8 (`reset` called in
-/// `open_with` instead of `flush`) while the single-reopen tests above
-/// stayed green.
 #[test]
 fn recovery_survives_a_second_reopen_without_flush() {
     let dir = temp_dir("second-reopen");
@@ -184,9 +171,9 @@ fn torn_tail_is_truncated_and_open_succeeds() {
 ///
 /// The damage used here is an invalid tag byte mid-log (framing survives, so
 /// the reader can see bytes continue after the bad record — provably not a
-/// torn tail). Note the accepted M8 gap: mid-log damage that mimics a torn
-/// tail (e.g. a corrupted length field consuming the rest of the file) is
-/// undetectable without per-record CRCs, which arrive at M11.
+/// torn tail). Known gap: mid-log damage that mimics a torn tail (e.g. a
+/// corrupted length field consuming the rest of the file) is undetectable
+/// without per-record checksums, which are planned but not yet implemented.
 #[test]
 fn mid_log_damage_fails_open_as_corruption() {
     let dir = temp_dir("mid-log-damage");
@@ -206,18 +193,16 @@ fn mid_log_damage_fails_open_as_corruption() {
     let Err(err) = Db::open(&dir) else {
         panic!("open must fail: acknowledged data is damaged mid-log");
     };
-    // TODO(tighten): assert the exact corruption variant once you name it
-    // (M8.md leaves the CorruptWal-shaped variant's name to you). The half
-    // of the spec that is already settled: it must NOT classify as Io —
-    // environmental errors mean "retry"; this means "recover".
+    // Corruption must not classify as Io: an environmental error tells the
+    // caller to retry, corruption tells the caller to recover.
     assert!(
-        !matches!(err, Error::Io(_)),
-        "mid-log damage is corruption, not an environmental I/O failure; got: {err:?}"
+        matches!(err, Error::CorruptWal { .. }),
+        "mid-log damage must surface as WAL corruption; got: {err:?}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Startup obstacles (M8 steps 1 and 2).
+// Startup obstacles: locking and debris.
 // ---------------------------------------------------------------------------
 
 /// Two processes must not share a directory. The second open fails fast with
@@ -257,7 +242,7 @@ fn stale_tmp_is_swept_at_open() {
 }
 
 // ---------------------------------------------------------------------------
-// WAL lifecycle (M8 step 5).
+// WAL lifecycle.
 // ---------------------------------------------------------------------------
 
 /// After a successful flush the flushed records are durable in the SSTable,
@@ -265,9 +250,9 @@ fn stale_tmp_is_swept_at_open() {
 /// reset, every reopen replays writes that already live in SSTables, and the
 /// log grows without bound.
 ///
-/// Only the end state is pinned here. The crash-window ordering (truncate
+/// Only the end state is pinned here. The crash-window ordering (reset
 /// strictly after rename + directory fsync) cannot be observed from an
-/// integration test and belongs to M9's fault injection.
+/// integration test; it needs fault injection.
 #[test]
 fn wal_is_reset_after_successful_flush() {
     let dir = temp_dir("wal-reset");

@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::fsync;
 use crate::lookup::EntryState::{Absent, Live, Tombstone};
 use crate::memtable::{Memtable, SkipListMemtable};
 use crate::sstable::SsTable;
@@ -21,7 +22,6 @@ pub struct Db<M: Memtable = SkipListMemtable> {
     memtable: M,
     path: PathBuf,
     sstables: Vec<SsTable>,
-    #[allow(dead_code)]
     directory: File,
     wal: Wal,
 }
@@ -111,6 +111,8 @@ impl<M: Memtable> Db<M> {
     pub fn flush(&mut self) -> Result<()> {
         let path = self.path.join("sstable.sst");
         SsTable::flush(&path, &self.memtable)?;
+        fsync::durable_sync(&self.directory)?;
+
         self.sstables.push(SsTable::open(&path)?);
         self.wal.reset()?;
         self.memtable.clear();

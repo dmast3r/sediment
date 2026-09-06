@@ -1,9 +1,9 @@
-use crate::Error;
 use crate::Error::{CorruptSsTable, Io};
 use crate::error::Result;
 use crate::lookup::EntryState;
 use crate::memtable::Memtable;
 use crate::record::{DecodeError, Record};
+use crate::{Error, fsync};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs::{File, rename};
@@ -40,8 +40,8 @@ impl SsTable {
 
     pub(crate) fn flush<P: AsRef<Path>, M: Memtable>(path: P, memtable: &M) -> Result<()> {
         let path_buf = Self::tmp_path(path.as_ref());
-
-        let mut writer = BufWriter::new(File::create(&path_buf)?);
+        let file = File::create(&path_buf)?;
+        let mut writer = BufWriter::new(&file);
 
         memtable.iter().try_for_each(|(key, val)| -> Result<()> {
             Record::encode(&mut writer, key, val)?;
@@ -49,11 +49,9 @@ impl SsTable {
         })?;
 
         writer.write_all(&Self::MAGIC.to_le_bytes())?;
-        writer
-            .into_inner()
-            .map_err(|e| e.into_error())?
-            .sync_all()?;
+        writer.into_inner().map_err(|e| e.into_error())?;
 
+        fsync::durable_sync(&file)?;
         rename(&path_buf, path.as_ref())?;
 
         Ok(())
@@ -182,14 +180,9 @@ impl SsTable {
 }
 
 // ---------------------------------------------------------------------------
-// M6 tests — write path (written by Claude; implement against these).
+// Write-path unit tests.
 //
-// All tests below will NOT COMPILE until you:
-//   1. add `flush_entries()` to the `Memtable` trait (in memtable.rs),
-//   2. implement it for `SkipListMemtable`,
-//   3. implement `SsTable::flush(path, memtable)` here.
-//
-// Entry encoding spec the tests assert against:
+// Entry encoding these tests assert against:
 //   [key_len: u32 LE][key bytes][tag: u8][value_len: u32 LE][value bytes]
 //   tag=0 Live, tag=1 Tombstone (value_len=0 for tombstones, uniform shape).
 // ---------------------------------------------------------------------------
@@ -203,7 +196,7 @@ mod tests {
     /// Build a unique temp dir path for a test, cleaned of prior-run leftovers.
     fn temp_path(test_name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("sediment-m6-{test_name}.sst"));
+        p.push(format!("sediment-sstable-{test_name}.sst"));
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -486,14 +479,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // M8 step 0b — mid-record EOF is corruption, not an I/O error.
+    // Mid-record EOF is corruption, not an I/O error.
     //
-    // Decided in the 2026-08-29 error-handling design session (see
-    // docs/design/error-handling-boundary.md, "Errors must distinguish what
-    // callers must treat differently"). Inside a scan whose bounds guarantee
-    // a complete record, running out of bytes means the file lies about its
-    // own structure: that is CorruptSsTable, so the caller knows retrying is
-    // useless. Every other io::ErrorKind must still pass through as Io.
+    // See docs/design/error-handling-boundary.md ("Errors must distinguish
+    // what callers must treat differently"). Inside a scan whose bounds
+    // guarantee a complete record, running out of bytes means the file lies
+    // about its own structure: that is CorruptSsTable, so the caller knows
+    // retrying is useless. Every other io::ErrorKind must still pass through
+    // as Io.
     // -----------------------------------------------------------------------
 
     /// A file with a valid footer whose one record claims a value longer than

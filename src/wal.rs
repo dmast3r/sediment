@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::fsync;
 use crate::record::{DecodeError, Record};
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, Write};
@@ -26,6 +27,7 @@ impl Wal {
         let mut buf = Vec::new();
         Record::encode(&mut buf, key, value)?;
         self.file.write_all(&buf)?;
+        fsync::durable_sync(&self.file)?;
         Ok(())
     }
 

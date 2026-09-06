@@ -5,10 +5,7 @@
 //! deep behavior. Behavioral tests (round-trip, overwrite, delete
 //! semantics) live in `memtable_ops.rs`.
 //!
-//! Originally written for M1 as `#[should_panic]` stubs against
-//! `unimplemented!()`. Updated at M2: the methods now do real work, so
-//! these assert the API is callable and returns the right *types*. The
-//! explicit type annotations (`let _: Option<Vec<u8>>`) are the point —
+//! The explicit type annotations (`let _: Option<Vec<u8>>`) are the point —
 //! they pin the signatures and fail to compile if the shape drifts.
 
 use std::path::{Path, PathBuf};
@@ -80,8 +77,8 @@ fn get_returns_optional_owned_bytes() {
 }
 
 /// `delete` takes a key and returns `Result<()>`. Deleting a key that
-/// doesn't exist is NOT an error — it's a no-op (or, internally, writes
-/// a tombstone; that's M3's concern).
+/// doesn't exist is NOT an error — it's a no-op (internally, it writes
+/// a tombstone either way).
 #[test]
 fn delete_returns_unit_on_success() {
     let dir = temp_dir("delete-unit");

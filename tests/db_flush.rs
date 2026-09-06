@@ -71,8 +71,8 @@ fn flush_writes_sstable_into_the_db_directory() {
 }
 
 /// Nothing is written outside the database directory. Checked by confirming the
-/// directory holds exactly the expected files — no stray siblings. Since M8
-/// the WAL lives alongside the SSTable, so the expected inventory is two files.
+/// directory holds exactly the expected files — no stray siblings. The WAL
+/// lives alongside the SSTable, so the expected inventory is two files.
 #[test]
 fn flush_writes_exactly_one_file() {
     let dir = temp_dir("exactly-one-file");
@@ -123,8 +123,8 @@ fn successful_flush_leaves_no_tmp_file() {
 // Memtable lifecycle
 // ---------------------------------------------------------------------------
 
-// "flush empties the memtable" is NOT tested here, and cannot be: as of M7
-// `Db::get` falls through to the SSTables, so it returns the same value whether
+// "flush empties the memtable" is NOT tested here, and cannot be: `Db::get`
+// falls through to the SSTables, so it returns the same value whether
 // the key is in memory or on disk. That is the point of the read path, and it
 // makes the memtable's emptiness invisible from outside the crate. The
 // invariant is pinned by the unit test `flush_empties_the_memtable` in
@@ -178,7 +178,7 @@ fn flushing_an_empty_memtable_is_harmless() {
 }
 
 /// Flushing twice in a row succeeds. The second flush overwrites the first
-/// file, because the file name is fixed for this milestone.
+/// file, because the file name is currently fixed.
 ///
 /// This documents current behavior rather than endorsing it: the second flush
 /// DESTROYING the first table is why sequenced file names are a deferred item.
@@ -216,3 +216,35 @@ fn second_flush_replaces_the_first_file() {
         vec!["sstable.sst".to_string(), "wal".to_string()]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Not tested here, and why
+// ---------------------------------------------------------------------------
+//
+// Three properties of the write path have no test, and green above does not
+// imply any of them hold:
+//
+//   1. A failed write leaves no file at the final path.
+//   2. A crash between `sync_all` and `rename` is recoverable.
+//   3. `sync_all` makes the bytes survive a power cut.
+//
+// All three need the filesystem to fail on demand. Why that is not cheap:
+//
+//   * A fake writer gets you partway. You can define a type that implements
+//     `std::io::Write` and returns an error after N bytes, hand it to the
+//     encoding loop, and prove the `?` operators propagate correctly. That is
+//     worth doing and would be a genuine test of the encoder.
+//   * It cannot reach the rest. `sync_all` is a method on `std::fs::File`, a
+//     concrete type. `rename` is a free function in `std::fs`. Neither is
+//     called through the `Write` trait, so substituting a fake writer does not
+//     intercept them. Covering those needs an abstraction over the filesystem
+//     itself — a trait with `create`, `sync`, and `rename` methods, with a real
+//     implementation and a failing one. That is a real design change to the
+//     write path, not a test-only addition.
+//   * Property 3 is not testable in a unit test at all. Confirming data survives
+//     a power cut requires cutting the power.
+//
+// Where this belongs: property-based testing (see ROADMAP.md) already scopes
+// "recovery from random crash points", which is the same machinery. Introducing
+// a filesystem abstraction there covers 1 and 2 together. Property 3 stays
+// untestable and is handled by review, not tests.
